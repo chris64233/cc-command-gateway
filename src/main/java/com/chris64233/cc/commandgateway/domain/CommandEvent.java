@@ -10,22 +10,26 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Index;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
+/**
+ * 指令生命周期事件（接受、派发、取消、超时）。事件编号全局唯一：
+ * 取消事件使用客户端提供的取消号，其余事件使用确定性编号，
+ * 使取消与超时扫描重试天然幂等。
+ */
 @Entity
 @Table(
-        name = "receipt_event",
-        uniqueConstraints = @UniqueConstraint(name = "uk_receipt_event_id", columnNames = "event_id"),
-        indexes = @Index(name = "idx_receipt_command", columnList = "command_id"))
-public class ReceiptEvent {
+        name = "command_event",
+        uniqueConstraints = @UniqueConstraint(name = "uk_command_event_id", columnNames = "event_id"),
+        indexes = @Index(name = "idx_command_event_command", columnList = "command_id"))
+public class CommandEvent {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(name = "event_id", nullable = false, length = 64)
+    @Column(name = "event_id", nullable = false, length = 128)
     private String eventId;
 
     @Column(name = "command_id", nullable = false)
@@ -39,32 +43,26 @@ public class ReceiptEvent {
 
     @Enumerated(EnumType.STRING)
     @Column(name = "kind", nullable = false, length = 24)
-    private ReceiptKind kind;
+    private CommandEventKind kind;
 
-    @Lob
-    @Column(name = "content")
-    private String content;
+    @Column(name = "detail", length = 512)
+    private String detail;
 
-    @Column(name = "received_at", nullable = false)
-    private Instant receivedAt;
+    @Column(name = "occurred_at", nullable = false)
+    private Instant occurredAt;
 
-    /** 指令已取消或超时后到达的迟到回执：仅作异常记录保留，不改变指令状态。 */
-    @Column(name = "late", nullable = false)
-    private boolean late;
-
-    protected ReceiptEvent() {
+    protected CommandEvent() {
     }
 
-    public ReceiptEvent(String eventId, Long commandId, String commandUuid, long fenceToken,
-                        ReceiptKind kind, String content, Instant receivedAt, boolean late) {
+    public CommandEvent(String eventId, Long commandId, String commandUuid, long fenceToken,
+                        CommandEventKind kind, String detail, Instant occurredAt) {
         this.eventId = eventId;
         this.commandId = commandId;
         this.commandUuid = commandUuid;
         this.fenceToken = fenceToken;
         this.kind = kind;
-        this.content = content;
-        this.receivedAt = receivedAt;
-        this.late = late;
+        this.detail = detail;
+        this.occurredAt = occurredAt;
     }
 
     public Long getId() {
@@ -87,19 +85,15 @@ public class ReceiptEvent {
         return fenceToken;
     }
 
-    public ReceiptKind getKind() {
+    public CommandEventKind getKind() {
         return kind;
     }
 
-    public String getContent() {
-        return content;
+    public String getDetail() {
+        return detail;
     }
 
-    public Instant getReceivedAt() {
-        return receivedAt;
-    }
-
-    public boolean isLate() {
-        return late;
+    public Instant getOccurredAt() {
+        return occurredAt;
     }
 }

@@ -14,11 +14,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.chris64233.cc.commandgateway.service.CommandLifecycleService;
 import com.chris64233.cc.commandgateway.service.CommandService;
 import com.chris64233.cc.commandgateway.service.DeviceService;
 import com.chris64233.cc.commandgateway.service.LeaseService;
 import com.chris64233.cc.commandgateway.service.ReceiptService;
 import com.chris64233.cc.commandgateway.web.dto.AcquireLeaseRequest;
+import com.chris64233.cc.commandgateway.web.dto.CancelCommandRequest;
 import com.chris64233.cc.commandgateway.web.dto.CommandView;
 import com.chris64233.cc.commandgateway.web.dto.DeviceView;
 import com.chris64233.cc.commandgateway.web.dto.LeaseView;
@@ -34,15 +36,18 @@ public class DeviceController {
     private final DeviceService deviceService;
     private final LeaseService leaseService;
     private final CommandService commandService;
+    private final CommandLifecycleService commandLifecycleService;
     private final ReceiptService receiptService;
 
     public DeviceController(DeviceService deviceService,
                             LeaseService leaseService,
                             CommandService commandService,
+                            CommandLifecycleService commandLifecycleService,
                             ReceiptService receiptService) {
         this.deviceService = deviceService;
         this.leaseService = leaseService;
         this.commandService = commandService;
+        this.commandLifecycleService = commandLifecycleService;
         this.receiptService = receiptService;
     }
 
@@ -85,8 +90,33 @@ public class DeviceController {
                 request.fenceToken(),
                 request.clientSeq(),
                 request.idempotencyKey(),
-                request.payload());
+                request.payload(),
+                request.deadlineAt());
         return ResponseEntity.status(201).body(view);
+    }
+
+    @PostMapping("/{deviceId}/commands/{commandUuid}/dispatch")
+    public CommandView dispatchCommand(@PathVariable String deviceId,
+                                       @PathVariable String commandUuid) {
+        return commandLifecycleService.dispatch(deviceId, commandUuid);
+    }
+
+    @PostMapping("/{deviceId}/commands/{commandUuid}/cancel")
+    public CommandView cancelCommand(@PathVariable String deviceId,
+                                     @PathVariable String commandUuid,
+                                     @Valid @RequestBody CancelCommandRequest request) {
+        return commandLifecycleService.cancel(
+                deviceId,
+                commandUuid,
+                request.leaseId(),
+                request.fenceToken(),
+                request.cancelId(),
+                request.reason());
+    }
+
+    @PostMapping("/{deviceId}/timeout-scan")
+    public List<CommandView> scanTimeouts(@PathVariable String deviceId) {
+        return commandLifecycleService.scanTimeouts(deviceId);
     }
 
     @GetMapping("/{deviceId}/commands")

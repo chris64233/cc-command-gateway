@@ -16,5 +16,7 @@ public record CommandView(
         long acceptOrder,
         CommandState state,
         Instant acceptedAt,
+        Instant deadlineAt,
+        List<CommandEventView> events,
         List<ReceiptView> receipts) {
 }

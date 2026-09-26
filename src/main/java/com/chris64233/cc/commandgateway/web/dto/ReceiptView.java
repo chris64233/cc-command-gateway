@@ -10,5 +10,6 @@ public record ReceiptView(
         long fenceToken,
         ReceiptKind kind,
         String content,
-        Instant receivedAt) {
+        Instant receivedAt,
+        boolean late) {
 }

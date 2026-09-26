@@ -1,13 +1,10 @@
 package com.chris64233.cc.commandgateway.web.dto;
 
-import java.time.Instant;
-
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 
-public record SubmitCommandRequest(
+public record CancelCommandRequest(
         @NotBlank
         @Size(max = 64)
         String leaseId,
@@ -15,15 +12,10 @@ public record SubmitCommandRequest(
         @Positive
         long fenceToken,
 
-        @Positive
-        long clientSeq,
-
         @NotBlank
-        @Size(max = 128)
-        String idempotencyKey,
+        @Size(max = 64)
+        String cancelId,
 
-        @NotNull
-        String payload,
-
-        Instant deadlineAt) {
+        @Size(max = 512)
+        String reason) {
 }

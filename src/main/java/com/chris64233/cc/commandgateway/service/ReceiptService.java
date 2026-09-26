@@ -72,11 +72,26 @@ public class ReceiptService {
             return toView(prior);
         }
 
-        if (command.getState().isTerminal()) {
-            throw ApiException.conflict("terminal_receipt",
-                    "command already reached terminal state: " + command.getState());
+        CommandState state = command.getState();
+        if (state == CommandState.CANCELLED || state == CommandState.TIMED_OUT) {
+            // 指令已取消/超时：迟到回执作为异常记录保留（late=true），但不改变指令状态。
+            ReceiptEvent late = new ReceiptEvent(
+                    eventId,
+                    command.getId(),
+                    commandUuid,
+                    fenceToken,
+                    kind,
+                    content,
+                    now,
+                    true);
+            receiptEventRepository.save(late);
+            return toView(late);
         }
-        if (kind == ReceiptKind.ACK && command.getState() == CommandState.ACKNOWLEDGED) {
+        if (state.isTerminal()) {
+            throw ApiException.conflict("terminal_receipt",
+                    "command already reached terminal state: " + state);
+        }
+        if (kind == ReceiptKind.ACK && state == CommandState.ACKNOWLEDGED) {
             throw ApiException.conflict("receipt_state_conflict",
                     "command is already acknowledged; duplicate ack event id required");
         }
@@ -88,7 +103,8 @@ public class ReceiptService {
                 fenceToken,
                 kind,
                 content,
-                now);
+                now,
+                false);
         receiptEventRepository.save(receipt);
 
         command.setState(switch (kind) {
@@ -107,6 +123,7 @@ public class ReceiptService {
                 receipt.getFenceToken(),
                 receipt.getKind(),
                 receipt.getContent(),
-                receipt.getReceivedAt());
+                receipt.getReceivedAt(),
+                receipt.isLate());
     }
 }

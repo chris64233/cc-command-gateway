@@ -1,5 +1,7 @@
 package com.chris64233.cc.commandgateway.repo;
 
+import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -12,6 +14,7 @@ import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import com.chris64233.cc.commandgateway.domain.CommandRecord;
+import com.chris64233.cc.commandgateway.domain.CommandState;
 
 public interface CommandRepository extends JpaRepository<CommandRecord, Long> {
 
@@ -20,6 +23,9 @@ public interface CommandRepository extends JpaRepository<CommandRecord, Long> {
     Optional<CommandRecord> findByDeviceIdAndIdempotencyKey(String deviceId, String idempotencyKey);
 
     List<CommandRecord> findByDeviceIdOrderByAcceptOrderAsc(String deviceId);
+
+    List<CommandRecord> findByDeviceIdAndStateInAndDeadlineAtLessThanEqual(
+            String deviceId, Collection<CommandState> states, Instant deadlineAt);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints(@QueryHint(name = LOCK_TIMEOUT, value = "5000"))
