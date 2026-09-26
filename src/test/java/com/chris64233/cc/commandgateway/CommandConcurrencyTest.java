@@ -20,14 +20,18 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 
+import com.chris64233.cc.commandgateway.domain.CancelKind;
 import com.chris64233.cc.commandgateway.domain.CommandState;
 import com.chris64233.cc.commandgateway.domain.ReceiptKind;
+import com.chris64233.cc.commandgateway.service.CancelService;
 import com.chris64233.cc.commandgateway.service.CommandService;
 import com.chris64233.cc.commandgateway.service.DeviceService;
 import com.chris64233.cc.commandgateway.service.LeaseService;
 import com.chris64233.cc.commandgateway.service.ReceiptService;
+import com.chris64233.cc.commandgateway.service.TimeoutService;
 import com.chris64233.cc.commandgateway.support.MutableClock;
 import com.chris64233.cc.commandgateway.support.TestClockConfig;
+import com.chris64233.cc.commandgateway.web.dto.CancelView;
 import com.chris64233.cc.commandgateway.web.dto.CommandView;
 import com.chris64233.cc.commandgateway.web.dto.LeaseView;
 
@@ -46,6 +50,10 @@ class CommandConcurrencyTest {
     private CommandService commandService;
     @Autowired
     private ReceiptService receiptService;
+    @Autowired
+    private CancelService cancelService;
+    @Autowired
+    private TimeoutService timeoutService;
     @Autowired
     private MutableClock clock;
 
@@ -179,5 +187,110 @@ class CommandConcurrencyTest {
         assertThat(accepted).isEqualTo(1);
         CommandState state = commandService.timeline(deviceId).get(0).state();
         assertThat(state).isIn(CommandState.SUCCEEDED, CommandState.FAILED);
+    }
+
+    @Test
+    void concurrentCancelAndDeviceAckSettleInExactlyOneOutcome() throws Exception {
+        String deviceId = "dev-concurrent-cancel-ack";
+        deviceService.register(deviceId);
+        LeaseView lease = leaseService.acquire(deviceId, "client-a",
+                clock.instant().plus(Duration.ofHours(1)));
+        CommandView command = commandService.submit(deviceId, lease.leaseId(), lease.fenceToken(),
+                1L, "cmd-race", "payload");
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+
+        Future<Boolean> cancelWon = pool.submit(() -> {
+            start.await();
+            try {
+                cancelService.cancel(deviceId, command.commandUuid(), lease.leaseId(),
+                        lease.fenceToken(), "cancel-race", null);
+                return true;
+            } catch (com.chris64233.cc.commandgateway.web.ApiException ex) {
+                if ("command_not_cancellable".equals(ex.getCode())) {
+                    return false;
+                }
+                throw ex;
+            }
+        });
+        Future<Boolean> ackReported = pool.submit(() -> {
+            start.await();
+            receiptService.report(deviceId, command.commandUuid(), lease.leaseId(),
+                    lease.fenceToken(), "ack-race", ReceiptKind.ACK, "started");
+            return true;
+        });
+
+        start.countDown();
+        boolean cancelled = cancelWon.get(30, TimeUnit.SECONDS);
+        ackReported.get(30, TimeUnit.SECONDS);
+        pool.shutdown();
+
+        CommandView view = commandService.timeline(deviceId).get(0);
+        if (cancelled) {
+            // 取消胜出：设备开始回执成为异常迟到回执，指令保持已取消
+            assertThat(view.state()).isEqualTo(CommandState.CANCELLED);
+            assertThat(view.cancel().kind()).isEqualTo(CancelKind.CLIENT);
+            assertThat(view.receipts()).singleElement().satisfies(receipt -> {
+                assertThat(receipt.kind()).isEqualTo(ReceiptKind.ACK);
+                assertThat(receipt.anomalous()).isTrue();
+            });
+        } else {
+            // 设备开始回执胜出：指令进入执行阶段，取消被拒绝
+            assertThat(view.state()).isEqualTo(CommandState.ACKNOWLEDGED);
+            assertThat(view.cancel()).isNull();
+            assertThat(view.receipts()).singleElement().satisfies(receipt -> {
+                assertThat(receipt.kind()).isEqualTo(ReceiptKind.ACK);
+                assertThat(receipt.anomalous()).isFalse();
+            });
+        }
+    }
+
+    @Test
+    void concurrentClientCancelAndTimeoutScanProduceSingleCancelEvent() throws Exception {
+        String deviceId = "dev-concurrent-cancel-timeout";
+        deviceService.register(deviceId);
+        LeaseView lease = leaseService.acquire(deviceId, "client-a",
+                clock.instant().plus(Duration.ofHours(1)));
+        CommandView command = commandService.submit(deviceId, lease.leaseId(), lease.fenceToken(),
+                1L, "cmd-race-timeout", "payload", clock.instant());
+
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+
+        Future<Boolean> clientCancelWon = pool.submit(() -> {
+            start.await();
+            try {
+                cancelService.cancel(deviceId, command.commandUuid(), lease.leaseId(),
+                        lease.fenceToken(), "cancel-client-race", null);
+                return true;
+            } catch (com.chris64233.cc.commandgateway.web.ApiException ex) {
+                if ("command_not_cancellable".equals(ex.getCode())) {
+                    return false;
+                }
+                throw ex;
+            }
+        });
+        Future<java.util.List<CancelView>> scanResult = pool.submit(() -> {
+            start.await();
+            return timeoutService.scanDevice(deviceId);
+        });
+
+        start.countDown();
+        boolean clientWon = clientCancelWon.get(30, TimeUnit.SECONDS);
+        java.util.List<CancelView> scanned = scanResult.get(30, TimeUnit.SECONDS);
+        pool.shutdown();
+
+        CommandView view = commandService.timeline(deviceId).get(0);
+        assertThat(view.cancel()).isNotNull();
+        if (clientWon) {
+            assertThat(view.state()).isEqualTo(CommandState.CANCELLED);
+            assertThat(view.cancel().kind()).isEqualTo(CancelKind.CLIENT);
+            assertThat(scanned).isEmpty();
+        } else {
+            assertThat(view.state()).isEqualTo(CommandState.TIMED_OUT);
+            assertThat(view.cancel().kind()).isEqualTo(CancelKind.TIMEOUT);
+            assertThat(scanned).hasSize(1);
+        }
     }
 }

@@ -63,12 +63,18 @@ public class CommandRecord {
     @Column(name = "accepted_at", nullable = false)
     private Instant acceptedAt;
 
+    @Column(name = "deadline_at")
+    private Instant deadlineAt;
+
+    @Column(name = "dispatched_at")
+    private Instant dispatchedAt;
+
     protected CommandRecord() {
     }
 
     public CommandRecord(String commandUuid, String deviceId, String leaseId, long fenceToken,
                          long clientSeq, String idempotencyKey, String payload,
-                         long acceptOrder, Instant acceptedAt) {
+                         long acceptOrder, Instant acceptedAt, Instant deadlineAt) {
         this.commandUuid = commandUuid;
         this.deviceId = deviceId;
         this.leaseId = leaseId;
@@ -79,6 +85,7 @@ public class CommandRecord {
         this.acceptOrder = acceptOrder;
         this.state = CommandState.PENDING;
         this.acceptedAt = acceptedAt;
+        this.deadlineAt = deadlineAt;
     }
 
     public Long getId() {
@@ -127,5 +134,17 @@ public class CommandRecord {
 
     public Instant getAcceptedAt() {
         return acceptedAt;
+    }
+
+    public Instant getDeadlineAt() {
+        return deadlineAt;
+    }
+
+    public Instant getDispatchedAt() {
+        return dispatchedAt;
+    }
+
+    public void setDispatchedAt(Instant dispatchedAt) {
+        this.dispatchedAt = dispatchedAt;
     }
 }

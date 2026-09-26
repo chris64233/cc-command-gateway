@@ -14,11 +14,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.chris64233.cc.commandgateway.service.CancelService;
 import com.chris64233.cc.commandgateway.service.CommandService;
 import com.chris64233.cc.commandgateway.service.DeviceService;
 import com.chris64233.cc.commandgateway.service.LeaseService;
 import com.chris64233.cc.commandgateway.service.ReceiptService;
+import com.chris64233.cc.commandgateway.service.TimeoutService;
 import com.chris64233.cc.commandgateway.web.dto.AcquireLeaseRequest;
+import com.chris64233.cc.commandgateway.web.dto.CancelCommandRequest;
+import com.chris64233.cc.commandgateway.web.dto.CancelView;
 import com.chris64233.cc.commandgateway.web.dto.CommandView;
 import com.chris64233.cc.commandgateway.web.dto.DeviceView;
 import com.chris64233.cc.commandgateway.web.dto.LeaseView;
@@ -35,15 +39,21 @@ public class DeviceController {
     private final LeaseService leaseService;
     private final CommandService commandService;
     private final ReceiptService receiptService;
+    private final CancelService cancelService;
+    private final TimeoutService timeoutService;
 
     public DeviceController(DeviceService deviceService,
                             LeaseService leaseService,
                             CommandService commandService,
-                            ReceiptService receiptService) {
+                            ReceiptService receiptService,
+                            CancelService cancelService,
+                            TimeoutService timeoutService) {
         this.deviceService = deviceService;
         this.leaseService = leaseService;
         this.commandService = commandService;
         this.receiptService = receiptService;
+        this.cancelService = cancelService;
+        this.timeoutService = timeoutService;
     }
 
     @PostMapping
@@ -85,8 +95,33 @@ public class DeviceController {
                 request.fenceToken(),
                 request.clientSeq(),
                 request.idempotencyKey(),
-                request.payload());
+                request.payload(),
+                request.deadlineAt());
         return ResponseEntity.status(201).body(view);
+    }
+
+    @PostMapping("/{deviceId}/commands/{commandUuid}/dispatch")
+    public CommandView dispatchCommand(@PathVariable String deviceId,
+                                       @PathVariable String commandUuid) {
+        return commandService.dispatch(deviceId, commandUuid);
+    }
+
+    @PostMapping("/{deviceId}/commands/{commandUuid}/cancel")
+    public CancelView cancelCommand(@PathVariable String deviceId,
+                                    @PathVariable String commandUuid,
+                                    @Valid @RequestBody CancelCommandRequest request) {
+        return cancelService.cancel(
+                deviceId,
+                commandUuid,
+                request.leaseId(),
+                request.fenceToken(),
+                request.cancelId(),
+                request.reason());
+    }
+
+    @PostMapping("/{deviceId}/timeout-scan")
+    public List<CancelView> scanTimeouts(@PathVariable String deviceId) {
+        return timeoutService.scanDevice(deviceId);
     }
 
     @GetMapping("/{deviceId}/commands")

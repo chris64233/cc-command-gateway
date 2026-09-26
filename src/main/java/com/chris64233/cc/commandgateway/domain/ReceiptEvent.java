@@ -48,11 +48,15 @@ public class ReceiptEvent {
     @Column(name = "received_at", nullable = false)
     private Instant receivedAt;
 
+    /** 指令已进入取消类终态后到达的迟到回执，仅作异常记录，不改变指令状态。 */
+    @Column(name = "anomalous", nullable = false)
+    private boolean anomalous;
+
     protected ReceiptEvent() {
     }
 
     public ReceiptEvent(String eventId, Long commandId, String commandUuid, long fenceToken,
-                        ReceiptKind kind, String content, Instant receivedAt) {
+                        ReceiptKind kind, String content, Instant receivedAt, boolean anomalous) {
         this.eventId = eventId;
         this.commandId = commandId;
         this.commandUuid = commandUuid;
@@ -60,6 +64,7 @@ public class ReceiptEvent {
         this.kind = kind;
         this.content = content;
         this.receivedAt = receivedAt;
+        this.anomalous = anomalous;
     }
 
     public Long getId() {
@@ -92,5 +97,9 @@ public class ReceiptEvent {
 
     public Instant getReceivedAt() {
         return receivedAt;
+    }
+
+    public boolean isAnomalous() {
+        return anomalous;
     }
 }

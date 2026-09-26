@@ -73,6 +73,20 @@ public class ReceiptService {
         }
 
         if (command.getState().isTerminal()) {
+            if (command.getState().isCancelled()) {
+                // 已取消/已超时指令的迟到回执：作为异常记录保留，但不得把指令改回成功。
+                ReceiptEvent late = new ReceiptEvent(
+                        eventId,
+                        command.getId(),
+                        commandUuid,
+                        fenceToken,
+                        kind,
+                        content,
+                        now,
+                        true);
+                receiptEventRepository.save(late);
+                return toView(late);
+            }
             throw ApiException.conflict("terminal_receipt",
                     "command already reached terminal state: " + command.getState());
         }
@@ -88,7 +102,8 @@ public class ReceiptService {
                 fenceToken,
                 kind,
                 content,
-                now);
+                now,
+                false);
         receiptEventRepository.save(receipt);
 
         command.setState(switch (kind) {
@@ -107,6 +122,7 @@ public class ReceiptService {
                 receipt.getFenceToken(),
                 receipt.getKind(),
                 receipt.getContent(),
-                receipt.getReceivedAt());
+                receipt.getReceivedAt(),
+                receipt.isAnomalous());
     }
 }
