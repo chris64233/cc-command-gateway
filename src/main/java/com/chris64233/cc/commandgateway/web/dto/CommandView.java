@@ -19,5 +19,9 @@ public record CommandView(
         Instant deadlineAt,
         Instant dispatchedAt,
         CancelView cancel,
-        List<ReceiptView> receipts) {
+        List<ReceiptView> receipts,
+        /** 本指令被哪条新指令取代（仅 REPLACED 状态非空）。 */
+        ReplacementView replacedBy,
+        /** 本指令取代了哪条旧指令（仅作为替换产物接受时非空）。 */
+        ReplacementView replacementOf) {
 }
