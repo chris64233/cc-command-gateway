@@ -19,6 +19,7 @@ import com.chris64233.cc.commandgateway.service.CommandService;
 import com.chris64233.cc.commandgateway.service.DeviceService;
 import com.chris64233.cc.commandgateway.service.LeaseService;
 import com.chris64233.cc.commandgateway.service.ReceiptService;
+import com.chris64233.cc.commandgateway.service.ReplaceService;
 import com.chris64233.cc.commandgateway.service.TimeoutService;
 import com.chris64233.cc.commandgateway.web.dto.AcquireLeaseRequest;
 import com.chris64233.cc.commandgateway.web.dto.CancelCommandRequest;
@@ -29,6 +30,7 @@ import com.chris64233.cc.commandgateway.web.dto.LeaseView;
 import com.chris64233.cc.commandgateway.web.dto.RegisterDeviceRequest;
 import com.chris64233.cc.commandgateway.web.dto.ReportReceiptRequest;
 import com.chris64233.cc.commandgateway.web.dto.ReceiptView;
+import com.chris64233.cc.commandgateway.web.dto.ReplaceCommandRequest;
 import com.chris64233.cc.commandgateway.web.dto.SubmitCommandRequest;
 
 @RestController
@@ -40,6 +42,7 @@ public class DeviceController {
     private final CommandService commandService;
     private final ReceiptService receiptService;
     private final CancelService cancelService;
+    private final ReplaceService replaceService;
     private final TimeoutService timeoutService;
 
     public DeviceController(DeviceService deviceService,
@@ -47,12 +50,14 @@ public class DeviceController {
                             CommandService commandService,
                             ReceiptService receiptService,
                             CancelService cancelService,
+                            ReplaceService replaceService,
                             TimeoutService timeoutService) {
         this.deviceService = deviceService;
         this.leaseService = leaseService;
         this.commandService = commandService;
         this.receiptService = receiptService;
         this.cancelService = cancelService;
+        this.replaceService = replaceService;
         this.timeoutService = timeoutService;
     }
 
@@ -117,6 +122,23 @@ public class DeviceController {
                 request.fenceToken(),
                 request.cancelId(),
                 request.reason());
+    }
+
+    @PostMapping("/{deviceId}/commands/{commandUuid}/replace")
+    public ResponseEntity<CommandView> replaceCommand(@PathVariable String deviceId,
+                                                      @PathVariable String commandUuid,
+                                                      @Valid @RequestBody ReplaceCommandRequest request) {
+        CommandView view = replaceService.replace(
+                deviceId,
+                commandUuid,
+                request.leaseId(),
+                request.fenceToken(),
+                request.clientSeq(),
+                request.replaceId(),
+                request.payload(),
+                request.deadlineAt(),
+                request.reason());
+        return ResponseEntity.status(201).body(view);
     }
 
     @PostMapping("/{deviceId}/timeout-scan")

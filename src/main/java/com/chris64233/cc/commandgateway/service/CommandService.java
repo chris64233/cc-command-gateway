@@ -3,6 +3,7 @@ package com.chris64233.cc.commandgateway.service;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -18,16 +19,19 @@ import com.chris64233.cc.commandgateway.domain.CommandState;
 import com.chris64233.cc.commandgateway.domain.Device;
 import com.chris64233.cc.commandgateway.domain.Lease;
 import com.chris64233.cc.commandgateway.domain.ReceiptEvent;
+import com.chris64233.cc.commandgateway.domain.ReplaceEvent;
 import com.chris64233.cc.commandgateway.repo.CancelEventRepository;
 import com.chris64233.cc.commandgateway.repo.CommandRepository;
 import com.chris64233.cc.commandgateway.repo.DeviceRepository;
 import com.chris64233.cc.commandgateway.repo.LeaseRepository;
 import com.chris64233.cc.commandgateway.repo.ReceiptEventRepository;
+import com.chris64233.cc.commandgateway.repo.ReplaceEventRepository;
 import com.chris64233.cc.commandgateway.web.ApiException;
 import com.chris64233.cc.commandgateway.web.dto.CancelView;
 import com.chris64233.cc.commandgateway.web.dto.CommandView;
 import com.chris64233.cc.commandgateway.web.dto.LeaseView;
 import com.chris64233.cc.commandgateway.web.dto.ReceiptView;
+import com.chris64233.cc.commandgateway.web.dto.ReplaceView;
 
 @Service
 public class CommandService {
@@ -37,6 +41,7 @@ public class CommandService {
     private final CommandRepository commandRepository;
     private final ReceiptEventRepository receiptEventRepository;
     private final CancelEventRepository cancelEventRepository;
+    private final ReplaceEventRepository replaceEventRepository;
     private final Clock clock;
 
     public CommandService(DeviceRepository deviceRepository,
@@ -44,12 +49,14 @@ public class CommandService {
                           CommandRepository commandRepository,
                           ReceiptEventRepository receiptEventRepository,
                           CancelEventRepository cancelEventRepository,
+                          ReplaceEventRepository replaceEventRepository,
                           Clock clock) {
         this.deviceRepository = deviceRepository;
         this.leaseRepository = leaseRepository;
         this.commandRepository = commandRepository;
         this.receiptEventRepository = receiptEventRepository;
         this.cancelEventRepository = cancelEventRepository;
+        this.replaceEventRepository = replaceEventRepository;
         this.clock = clock;
     }
 
@@ -94,7 +101,7 @@ public class CommandService {
                         "idempotency key was already used with a different request: "
                                 + idempotencyKey);
             }
-            return toView(existing, null, List.of());
+            return toView(existing, null, List.of(), null);
         }
 
         if (clientSeq <= lease.getLastAcceptedSeq()) {
@@ -120,7 +127,7 @@ public class CommandService {
                 deadlineAt);
         commandRepository.save(command);
 
-        return toView(command, null, List.of());
+        return toView(command, null, List.of(), null);
     }
 
     /**
@@ -144,7 +151,7 @@ public class CommandService {
             throw ApiException.conflict("command_not_dispatchable",
                     "command cannot be dispatched from state: " + command.getState());
         }
-        return toView(command, null, List.of());
+        return toView(command, null, List.of(), null);
     }
 
     @Transactional(readOnly = true)
@@ -166,6 +173,13 @@ public class CommandService {
                 .findByCommandIdIn(commandIds)
                 .stream()
                 .collect(Collectors.toMap(CancelEvent::getCommandId, cancel -> cancel));
+        // 替换关系同时挂在旧命令（被取代）与新命令（取代者）上。
+        Map<Long, ReplaceEvent> replacementsByCommand = new HashMap<>();
+        for (ReplaceEvent event : replaceEventRepository
+                .findByOldCommandIdInOrNewCommandIdIn(commandIds, commandIds)) {
+            replacementsByCommand.put(event.getOldCommandId(), event);
+            replacementsByCommand.put(event.getNewCommandId(), event);
+        }
 
         List<CommandView> views = new ArrayList<>(commands.size());
         for (CommandRecord command : commands) {
@@ -175,7 +189,11 @@ public class CommandService {
                     .map(CommandService::toReceiptView)
                     .toList();
             CancelEvent cancel = cancelsByCommand.get(command.getId());
-            views.add(toView(command, cancel == null ? null : toCancelView(cancel), receipts));
+            ReplaceEvent replacement = replacementsByCommand.get(command.getId());
+            views.add(toView(command,
+                    cancel == null ? null : toCancelView(cancel),
+                    receipts,
+                    replacement == null ? null : toReplaceView(replacement)));
         }
         return views;
     }
@@ -234,8 +252,18 @@ public class CommandService {
                 cancel.getCancelledAt());
     }
 
+    private static ReplaceView toReplaceView(ReplaceEvent event) {
+        return new ReplaceView(
+                event.getReplaceId(),
+                event.getOldCommandUuid(),
+                event.getNewCommandUuid(),
+                event.getFenceToken(),
+                event.getReason(),
+                event.getReplacedAt());
+    }
+
     private static CommandView toView(CommandRecord command, CancelView cancel,
-                                      List<ReceiptView> receipts) {
+                                      List<ReceiptView> receipts, ReplaceView replacement) {
         return new CommandView(
                 command.getCommandUuid(),
                 command.getDeviceId(),
@@ -250,7 +278,8 @@ public class CommandService {
                 command.getDeadlineAt(),
                 command.getDispatchedAt(),
                 cancel,
-                receipts);
+                receipts,
+                replacement);
     }
 
     public record DeviceStatus(String deviceId, long currentFenceToken, LeaseView currentLease) {

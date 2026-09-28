@@ -19,5 +19,6 @@ public record CommandView(
         Instant deadlineAt,
         Instant dispatchedAt,
         CancelView cancel,
-        List<ReceiptView> receipts) {
+        List<ReceiptView> receipts,
+        ReplaceView replacement) {
 }

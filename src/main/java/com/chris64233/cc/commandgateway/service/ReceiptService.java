@@ -73,8 +73,8 @@ public class ReceiptService {
         }
 
         if (command.getState().isTerminal()) {
-            if (command.getState().isCancelled()) {
-                // 已取消/已超时指令的迟到回执：作为异常记录保留，但不得把指令改回成功。
+            if (command.getState().isAborted()) {
+                // 已取消/已超时/已被替换指令的迟到回执：作为异常记录保留，但不得把指令改回成功。
                 ReceiptEvent late = new ReceiptEvent(
                         eventId,
                         command.getId(),

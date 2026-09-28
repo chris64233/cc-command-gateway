@@ -54,11 +54,12 @@
 PENDING → DISPATCHED → ACKNOWLEDGED → SUCCEEDED | FAILED
    └──────────┴──────────┴→ CANCELLED（客户端取消）
    └──────────┴──────────┴→ TIMED_OUT（超时取消）
+   └──────────┴──────────┴→ REPLACED（被新命令完整取代）
 ```
 
 - `PENDING`（待派发）→ `DISPATCHED`（已派发）：`POST .../commands/{commandUuid}/dispatch` 派发指令并记录 `dispatchedAt`；重复派发幂等返回，已进入执行阶段或终态的指令拒绝（`command_not_dispatchable`）；
-- `ACKNOWLEDGED` 表示设备已开始执行（收到 `ACK` 回执），此后不可取消；
-- 终态为 `SUCCEEDED` / `FAILED` / `CANCELLED` / `TIMED_OUT`。
+- `ACKNOWLEDGED` 表示设备已开始执行（收到 `ACK` 回执），此后不可取消、不可替换；
+- 终态为 `SUCCEEDED` / `FAILED` / `CANCELLED` / `TIMED_OUT` / `REPLACED`。
 
 ### 指令取消
 
@@ -75,6 +76,24 @@ PENDING → DISPATCHED → ACKNOWLEDGED → SUCCEEDED | FAILED
 - 扫描与主动取消使用同一统一时钟（`Clock`），并共享同一终态竞争规则（指令行悲观锁 + 状态判定）：与客户端取消、设备回执并发时只有一个获胜；
 - 超时取消事件使用确定性取消号 `timeout:{commandUuid}`，扫描可安全重试，不重复产生取消事件；已被客户端取消或已执行完成的指令不会被重复扫描取消。
 
+### 指令替换
+
+`POST .../commands/{commandUuid}/replace`，体：`{ "leaseId", "fenceToken", "clientSeq", "replaceId", "payload", "deadlineAt"?, "reason"? }`。允许尚未执行的设备命令被一条新命令**完整取代**：旧命令不删除，而是进入可追溯的 `REPLACED` 终态；新命令作为一条全新指令落库，继承同一设备上下文（`deviceId`）与业务上下文（当前有效租约、栅栏令牌、设备 `acceptOrder` 接受顺序、客户端序号）。
+
+允许替换的状态范围（与取消一致）：
+
+- 仅 `PENDING` / `DISPATCHED` 可被替换——即指令尚未进入设备执行阶段（未收到 `ACK`）；
+- 已 `ACKNOWLEDGED` 或已到终态（`SUCCEEDED` / `FAILED` / `CANCELLED` / `TIMED_OUT` / `REPLACED`）的指令拒绝替换（`command_not_replaceable`）——设备已实际开始执行的命令不得被伪装成"已替换"。
+
+其他规则：
+
+- 鉴权与取消相同：必须当前有效租约，栅栏令牌为设备当前令牌且不小于旧指令令牌（`lease_expired` / `fence_token_mismatch` / `stale_fence_token`）；新租约接管设备后可凭更大令牌替换旧租约时期接受的指令；
+- 新命令沿用提交指令的序号规则：`clientSeq` 必须大于租约最后接受序号（`stale_client_seq`），并获得设备上下一个 `acceptOrder`；新命令的幂等键采用 `replaceId`；
+- 替换请求按外部请求号 `replaceId` 幂等：同一请求号、同一旧命令、相同（租约、令牌、序号、内容、截止时间）的重放返回首次生成的新命令，不重复推进序号与接受顺序；同一请求号绑定不同旧命令返回 `replace_event_conflict`，同号但请求内容不同返回 `idempotency_conflict`；
+- 原子性：设备行与旧指令行悲观加锁，旧命令置 `REPLACED`、新命令落库、替换关系（`replace_event`）与时间线在**同一事务**中提交，不会出现只替换一半；唯一约束（每旧命令至多一条出向关系、每新命令至多一条入向关系）作为最后防线；
+- 与设备开始执行（`ACK`）/取消/超时并发时只可能有一个获胜：设备先 `ACK` 则替换被拒绝（`command_not_replaceable`）；替换先提交，则旧命令的迟到回执（含迟到 `ACK`/成功/失败）只作为**异常记录**保留（`anomalous=true`），不会把旧命令改回执行结果，也不影响新命令；
+- 新命令是一条独立指令，可单独派发、接收回执并到达自己的终态。
+
 ### 设备回执
 
 回执携带：指令编号、租约标识、栅栏令牌、回执事件编号 `eventId`、类型（`ACK`/`SUCCEEDED`/`FAILED`）与内容。
@@ -82,7 +101,7 @@ PENDING → DISPATCHED → ACKNOWLEDGED → SUCCEEDED | FAILED
 - 回执可乱序到达，每条只更新对应已接受指令，时间线按设备接受顺序展示并附带回执列表；
 - 状态流转：`PENDING → DISPATCHED → ACKNOWLEDGED → SUCCEEDED|FAILED`，`ACK` 后仍可到达终态；
 - 指令一旦进入 `SUCCEEDED`/`FAILED`，任何其他终态或迟到 `ACK` 均被拒绝（`terminal_receipt`）；
-- 已取消/已超时（`CANCELLED`/`TIMED_OUT`）指令的迟到回执作为**异常记录**保留（`anomalous=true`），出现在时间线中，但不会把指令改回成功；
+- 已取消/已超时/已替换（`CANCELLED`/`TIMED_OUT`/`REPLACED`）指令的迟到回执作为**异常记录**保留（`anomalous=true`），出现在时间线中，但不会把指令改回成功；
 - 未知指令（或不属于该设备）返回 404；令牌与指令接受时令牌不匹配返回 `fence_token_mismatch`；
 - 相同 `eventId` 的重复回执（指令、类型、内容一致）按幂等返回首次记录；同一事件编号绑定不同指令或不同内容返回 `receipt_event_conflict`。回执更新在指令行悲观锁事务内进行。
 
@@ -90,7 +109,7 @@ PENDING → DISPATCHED → ACKNOWLEDGED → SUCCEEDED | FAILED
 
 - `GET /api/devices/{deviceId}/status`：设备当前栅栏令牌与当前有效租约；
 - `GET /api/devices/{deviceId}/leases/current`：当前有效租约详情（含最后接受序号）；
-- `GET /api/devices/{deviceId}/commands`：按接受顺序排列的指令时间线。每条指令包含状态、`acceptedAt`、`dispatchedAt`、`deadlineAt`、取消事件（`cancel`：取消号、类型 `CLIENT`/`TIMEOUT`、原因、取消时间）与回执列表（含 `anomalous` 异常迟到标记），可明确区分接受、派发、取消、超时、设备执行及异常迟到回执。
+- `GET /api/devices/{deviceId}/commands`：按接受顺序排列的指令时间线。每条指令包含状态、`acceptedAt`、`dispatchedAt`、`deadlineAt`、取消事件（`cancel`：取消号、类型 `CLIENT`/`TIMEOUT`、原因、取消时间）、回执列表（含 `anomalous` 异常迟到标记）与替换关系（`replacement`：替换号 `replaceId`、旧命令 `oldCommandUuid`、新命令 `replacementCommandUuid`、令牌、原因、替换时间；旧命令与其新命令上挂同一关系）。可据状态与上述字段明确区分取消（`CANCELLED`）、超时（`TIMED_OUT`）、替换（`REPLACED`）与设备实际执行结果（`ACKNOWLEDGED`/`SUCCEEDED`/`FAILED`）及异常迟到回执。
 
 ## HTTP 接口
 
@@ -104,6 +123,7 @@ PENDING → DISPATCHED → ACKNOWLEDGED → SUCCEEDED | FAILED
 | GET | `/api/devices/{deviceId}/commands` | 指令时间线 |
 | POST | `/api/devices/{deviceId}/commands/{commandUuid}/dispatch` | 派发指令到设备（幂等） |
 | POST | `/api/devices/{deviceId}/commands/{commandUuid}/cancel` | 取消指令，体：`{ "leaseId", "fenceToken", "cancelId", "reason"? }` |
+| POST | `/api/devices/{deviceId}/commands/{commandUuid}/replace` | 用新命令完整取代尚未执行（`PENDING`/`DISPATCHED`）的指令，返回新命令，体：`{ "leaseId", "fenceToken", "clientSeq", "replaceId", "payload", "deadlineAt"?, "reason"? }` |
 | POST | `/api/devices/{deviceId}/timeout-scan` | 扫描并取消该设备已过截止时间的指令，返回本次产生的取消事件 |
 | POST | `/api/devices/{deviceId}/receipts` | 上报回执，体：`{ "commandUuid", "leaseId", "fenceToken", "eventId", "kind", "content" }` |
 
